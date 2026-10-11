@@ -1,0 +1,33 @@
+tmp/
+node_modules/
+.venv/
+venv/
+.env
+*.db
+*.sqlite3
+*.log
+
+# editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# react native / expo
+client/.expo/
+client/android/.gradle/
+client/android/app/build/
+client/ios/Pods/
+client/ios/build/
+*.keystore
+!debug.keystore

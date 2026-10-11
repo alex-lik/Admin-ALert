@@ -76,6 +76,9 @@ python tools/release.py bump --type minor   # обновит VERSION, CHANGELOG,
 Релиз собирает `.github/workflows/release.yml`: при merge в `main` берётся тип бампа
 по коммитам, обновляются `VERSION`/`CHANGELOG`, ставится тег `vX.Y.Z`, создаётся GitHub Release.
 
+Настройки GitHub, которые нужно включить руками (ветки, проверки, права Actions) —
+в [CONTRIBUTING.md](CONTRIBUTING.md#настройки-github-сделать-один-раз-вручную).
+
 ## Быстрый старт (сервер)
 
 ```bash

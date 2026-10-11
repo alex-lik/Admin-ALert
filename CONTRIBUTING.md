@@ -36,6 +36,37 @@ refactor(events)!: dedup_key обязателен
 - Breaking change — `!` после типа/скоупа **и** раздел `BREAKING CHANGE:` в теле коммита.
 - Никаких секретов, токенов, паролей — ни в коммитах, ни в задачах Project Visor.
 
+## Настройки GitHub (сделать один раз вручную)
+
+`gh`/токена у агента нет, поэтому эти пункты нужно включить руками в
+**Settings → Branches / Settings → Actions**:
+
+**Settings → General → Branches**
+
+- **Default branch: `main`** — открывать репозиторий по стабильной ветке.
+- **Allow squash merging: off**, merge commits: on. Rebase merge: on.
+  Squash ломает историю Conventional Commits, а rebase — историю релизов.
+
+**Settings → Branches → Add rule**
+
+| Правило | Настройки |
+|---|---|
+| `main` | Require PR to merge · **Do not allow bypassing** · Require status checks: `SemVer`, `Server lint & test`, `Conventional commits` · Require branches up to date |
+| `dev` | Require PR to merge · Require status checks: `SemVer`, `Server lint & test`, `Conventional commits` |
+
+**Settings → Actions → General**
+
+- Workflow permissions: **Read and write** — иначе `release.yml` не сможет создать тег и GitHub Release.
+
+**Settings → Secrets**
+
+- `POSTGRES_PASSWORD` — для docker-compose.
+- Остальные секреты (FCM, APNs, AMI, JWT) в GitHub Secrets **не выносить**, пока их
+  не начал использовать CI.
+
+Если `main` нужно защитить строже (только хотфиксы через отдельную ветку `hotfix/*`) —
+это делается добавлением правила «Require PR to merge» с утверждёнными ревьюерами.
+
 ## Как это влияет на версию
 
 | Коммит | SemVer |

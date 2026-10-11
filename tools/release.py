@@ -153,7 +153,8 @@ def cmd_next(args: argparse.Namespace) -> int:
     if not commits:
         print("none")
         return 0
-    unknown = [c["subject"] for c in commits if c["type"] not in BUMP_TYPES | NO_BUMP_TYPES]
+    known_types = set(BUMP_TYPES) | NO_BUMP_TYPES
+    unknown = [c["subject"] for c in commits if c["type"] not in known_types]
     if unknown:
         for subject in unknown:
             print(f"warning: нераспознанный тип коммита: {subject}", file=sys.stderr)
@@ -176,9 +177,11 @@ def cmd_bump(args: argparse.Namespace) -> int:
     changelog = changelog.replace("## [Unreleased]\n", f"## [Unreleased]\n\n{entry}", 1)
     CHANGELOG_FILE.write_text(changelog, encoding="utf-8")
     write_version(version)
-    sync_manifests(version)
+    manifests = sync_manifests(version)
 
-    git("add", str(VERSION_FILE), str(CHANGELOG_FILE))
+    # Индексируем ровно то, что изменили, чтобы bump не тянул за собой чужие правки.
+    changed = [VERSION_FILE, CHANGELOG_FILE, *(ROOT / path for path in manifests)]
+    git("add", *(str(path) for path in changed))
     print(version)
     return 0
 

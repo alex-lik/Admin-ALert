@@ -1,0 +1,60 @@
+name: Admin-ALert
+
+x-app: &app
+  build:
+    context: ./server
+  env_file: [.env]
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-adminalert}:${POSTGRES_PASSWORD:-adminalert}@db:5432/${POSTGRES_DB:-adminalert}
+    REDIS_URL: redis://redis:6379/0
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    ports: ["8080:8080"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    # У воркера нет HTTP-эндпоинта. Liveness — через API: он опрашивает БД и Redis
+    # (health/ready) и видит, что воркер застрял. Наблюдаемость — по логам и метрикам.
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-adminalert}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-adminalert}
+      POSTGRES_DB: ${POSTGRES_DB:-adminalert}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-adminalert}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

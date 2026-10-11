@@ -1,0 +1,90 @@
+name: Release
+
+# SemVer-релиз по Conventional Commits: merge в main -> bump -> changelog -> тег -> GitHub Release.
+# Тип бампа определяется автоматически (tools/release.py next).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Принудительный тип бампа"
+        required: true
+        default: auto
+        type: choice
+        options: [auto, patch, minor, major]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve bump type
+        id: bump
+        run: |
+          REQUESTED="${{ inputs.bump }}"
+          if [ "$REQUESTED" = "auto" ] || [ -z "$REQUESTED" ]; then
+            BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$BASE" ]; then
+              TYPE=$(python tools/release.py next "$BASE..HEAD")
+            else
+              echo "Тегов нет — пропускаем авто-релиз. Создайте первый тег вручную:"
+              echo "  python tools/release.py bump --type minor && git tag -a v\$(cat VERSION) -m v\$(cat VERSION) && git push origin main --tags"
+              exit 0
+            fi
+          else
+            TYPE="$REQUESTED"
+          fi
+          if [ "$TYPE" = "none" ]; then
+            echo "Изменений, влияющих на версию, нет — релиз не создаём."
+            exit 0
+          fi
+          echo "type=$TYPE" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version and update changelog
+        if: steps.bump.outputs.type != ''
+        run: |
+          python tools/release.py bump --type "${{ steps.bump.outputs.type }}"
+          VERSION=$(cat VERSION)
+          git add VERSION CHANGELOG.md server/pyproject.toml client/package.json desktop-agent/package.json
+          git commit -m "chore(release): v$VERSION"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin main --follow-tags
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish image
+        if: steps.bump.outputs.type != ''
+        run: |
+          docker login ghcr.io -u "${{ github.actor }}" --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+          docker build -t ghcr.io/${{ github.repository }}/server:${{ steps.bump.outputs.version }} server/
+          docker build -t ghcr.io/${{ github.repository }}/server:latest server/
+          docker push ghcr.io/${{ github.repository }}/server:${{ steps.bump.outputs.version }}
+          docker push ghcr.io/${{ github.repository }}/server:latest
+
+      - name: GitHub Release
+        if: steps.bump.outputs.type != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.version }}
+          generate_release_notes: true
+          body_path: CHANGELOG.md

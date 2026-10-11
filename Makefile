@@ -4,7 +4,7 @@ PY := python
 SERVER := server
 COMPOSE := docker compose
 
-.PHONY: help version version-check bump-minor bump-patch lint fmt test test-cov up down logs migrate revision ps clean
+.PHONY: help version version-check bump-minor bump-patch lint fmt check test test-cov up down logs migrate revision ps clean
 
 help: ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -23,7 +23,9 @@ bump-patch: ## Поднять версию на patch
 	@$(PY) tools/release.py bump --type patch
 
 # ── Качество ──
-lint: version-check ## Линт + проверка версии
+check: version-check lint test ## Полный набор проверок перед коммитом (CI/CD нет)
+
+lint: ## Линт + проверка версии
 	cd $(SERVER) && ruff check app tests
 	cd $(SERVER) && ruff format --check app tests
 	cd $(SERVER) && mypy app

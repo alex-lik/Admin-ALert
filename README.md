@@ -27,6 +27,8 @@ Alertmanager / Uptime Kuma / Zabbix / curl
 | `desktop-agent/` | Агент для сценария «диск заполнен» | каркас |
 | `docs/` | План, архитектура, ADR | живой документ |
 | `tools/release.py` | SemVer + Conventional Commits | рабочий |
+| `.github/` | шаблон PR | рабочий |
+| `Makefile` | команды, включая `make check` (замена CI) | рабочий |
 
 ## План работ
 
@@ -73,10 +75,14 @@ python tools/release.py bump --type minor   # обновит VERSION, CHANGELOG,
 | `refactor!: новая схема события` | major |
 | `docs: ADR про стек` | нет |
 
-Релиз собирает `.github/workflows/release.yml`: при merge в `main` берётся тип бампа
-по коммитам, обновляются `VERSION`/`CHANGELOG`, ставится тег `vX.Y.Z`, создаётся GitHub Release.
+Релиз делается руками: `bump` → коммит → тег `vX.Y.Z` → push. Полная процедура —
+в [CONTRIBUTING.md](CONTRIBUTING.md#релиз).
 
-Настройки GitHub, которые нужно включить руками (ветки, проверки, права Actions) —
+Автоматических сборок и деплоя пока нет. Перед коммитом прогоняется
+`make check` — это весь набор проверок, которые делал бы CI:
+SemVer-валидация, ruff, ruff format, mypy и pytest.
+
+Настройки GitHub, которые нужно включить руками (ветки, секреты) —
 в [CONTRIBUTING.md](CONTRIBUTING.md#настройки-github-сделать-один-раз-вручную).
 
 ## Быстрый старт (сервер)

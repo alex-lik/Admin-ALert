@@ -15,7 +15,8 @@
 | `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:` | версия не меняется |
 | `!` после типа/скоупа: `feat(api)!: ...` | major |
 
-Релизы собираются автоматически при merge в `main` (см. `.github/workflows/release.yml`).
+Релизы делаются вручную: `python tools/release.py bump --type <t>` → коммит →
+тег `vX.Y.Z` → push. Автоматических сборок в проекте нет.
 
 ## [Unreleased]
 
@@ -26,12 +27,18 @@
 - План проекта перенесён в `docs/plan.md` (5 блоков, чекбоксы) и загружен в Project Visor
   (проект `admin-alert`, 88 задач по разделам плана).
 - `docs/architecture.md`: компоненты, жизненный цикл алерта, модель эскалации, исходы звонка.
-- SemVer-версионирование: `VERSION`, `CHANGELOG.md`, Conventional Commits (`.commitlintrc.yml`).
+- SemVer-версионирование: `VERSION`, `CHANGELOG.md`, Conventional Commits.
 - `tools/release.py` — релизный инструмент без внешних зависимостей: `show`, `next`, `bump`, `sync`, `validate`.
-- CI: `ci.yml` (SemVer-валидация, ruff, mypy, pytest, docker build, commitlint) и
-  `release.yml` (авто-релиз по Conventional Commits в `main` → тег + GitHub Release + образ в GHCR).
 - Сервер: `/health` и `/health/ready`, `POST /events` с валидацией по единой схеме события
   и ответом 202, автомат состояний алерта с проверкой переходов, каркас воркера на
   опросе `next_action_at`, async-подключение к БД, Alembic.
 - `docker-compose.yml`: api, worker, db (postgres), redis.
+- `Makefile` с командой `make check` — весь набор проверок вручную, вместо CI.
 - Тесты: 15 штук на автомат состояний и HTTP-слой.
+
+### Fixed
+- `tools/release.py next`: падал с `TypeError` при разборе диапазона коммитов —
+  `BUMP_TYPES | NO_BUMP_TYPES`, где `BUMP_TYPES` — словарь, а не множество.
+- `tools/release.py bump`: в индекс попадали только `VERSION` и `CHANGELOG.md`,
+  хотя менялись ещё `server/pyproject.toml` и `client/package.json`. Теперь
+  индексируются ровно те файлы, которые изменил сам bump.

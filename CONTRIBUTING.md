@@ -39,7 +39,7 @@ refactor(events)!: dedup_key обязателен
 ## Настройки GitHub (сделать один раз вручную)
 
 `gh`/токена у агента нет, поэтому эти пункты нужно включить руками в
-**Settings → Branches / Settings → Actions**:
+**Settings → Branches**.
 
 **Settings → General → Branches**
 
@@ -51,21 +51,31 @@ refactor(events)!: dedup_key обязателен
 
 | Правило | Настройки |
 |---|---|
-| `main` | Require PR to merge · **Do not allow bypassing** · Require status checks: `SemVer`, `Server lint & test`, `Conventional commits` · Require branches up to date |
-| `dev` | Require PR to merge · Require status checks: `SemVer`, `Server lint & test`, `Conventional commits` |
+| `main` | Require PR to merge · Require branches up to date |
+| `dev` | Require PR to merge |
 
-**Settings → Actions → General**
-
-- Workflow permissions: **Read and write** — иначе `release.yml` не сможет создать тег и GitHub Release.
+> Status checks в правила не добавляем: CI/CD в проекте пока нет, и без него
+> GitHub не даст включить обязательные проверки. Версию и тесты проверяет
+> разработчик локально через `make check` (раздел ниже).
 
 **Settings → Secrets**
 
 - `POSTGRES_PASSWORD` — для docker-compose.
-- Остальные секреты (FCM, APNs, AMI, JWT) в GitHub Secrets **не выносить**, пока их
-  не начал использовать CI.
+- Остальные секреты (FCM, APNs, AMI, JWT) в GitHub Secrets **не выносить**:
+  автоматических сборок, которым они были бы нужны, пока нет.
 
 Если `main` нужно защитить строже (только хотфиксы через отдельную ветку `hotfix/*`) —
 это делается добавлением правила «Require PR to merge» с утверждёнными ревьюерами.
+
+## Проверки перед коммитом (CI/CD нет — проверяем локально)
+
+```bash
+make check        # release.py validate + ruff + ruff format --check + mypy + pytest
+```
+
+CI/CD в проекте нет, поэтому ответственность за зелёный прогон лежит на авторе
+изменения. Этот набор покрывает то, что обычно делает CI: версию, стиль,
+типы и тесты.
 
 ## Как это влияет на версию
 
@@ -88,28 +98,40 @@ python tools/release.py validate
 Чек-лист в [шаблоне PR](.github/PULL_REQUEST_TEMPLATE.md). Обязательно:
 
 - [ ] `python tools/release.py validate` проходит
-- [ ] Тесты проходят (`make test`)
+- [ ] `make check` зелёный (версия + ruff + mypy + pytest)
 - [ ] CHANGELOG обновлён, если изменение видно пользователю
 - [ ] Для RN-клиента: проверка на реальном устройстве (Samsung/Xiaomi/Huawei), не только эмулятор
 
 ## Релиз
 
-Ручной (экстренный):
+Полностью ручной: CI/CD в проекте нет.
 
 ```bash
+# 1. Посмотреть, какой бамп положен по коммитам после последнего тега
+python tools/release.py next $(git describe --tags --abbrev=0)..HEAD
+
+# 2. Поднять версию: обновит VERSION, CHANGELOG.md и манифесты, заодно заstage-ит
 python tools/release.py bump --type minor
+
+# 3. Дописать описание релиза в секцию CHANGELOG, закоммитить и запушить
 git commit -m "chore(release): v0.2.0"
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin main --tags
+git push origin main
+
+# 4. Тег
+git tag -a v0.2.0 -m "v0.2.0 — <краткое описание релиза>"
+git push origin --tags
+
+# 5. GitHub Release — вручную через https://github.com/alex-lik/Admin-ALert/releases/new
 ```
 
-Обычный — автоматический: merge в `main` → CI считает бамп → коммит, тег, GitHub Release.
+Шаг 5 можно пропустить: тег уже несёт ту же информацию.
 
 ## Локальный запуск
 
 ```bash
 make up        # docker compose
 make test      # pytest
-make lint      # ruff + проверка версии
+make lint      # ruff + mypy + проверка версии
+make check     # полный набор перед коммитом: версия, lint, типы, тесты
 make version   # показать версию
 ```

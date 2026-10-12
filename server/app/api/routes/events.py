@@ -1,12 +1,12 @@
-"""POST /events — единая точка приёма алертов (задачи 2.3, 2.4, 2.6).
+"""POST /events — единая точка приёма алертов (задачи 2.3, 2.4, 2.6)."""
 
-Каркас: валидация по единой схеме, ответ 202. Логика дедупликации и создания
-алерта будет добавлена вместе с моделями.
-"""
+from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, status
 
+from app.api.deps import SessionDep, resolve_project
 from app.schemas.events import EventAccepted, IncomingEvent
+from app.services.alerts import ingest_event
 
 router = APIRouter()
 
@@ -14,27 +14,29 @@ router = APIRouter()
 @router.post("", response_model=EventAccepted, status_code=status.HTTP_202_ACCEPTED)
 async def receive_event(
     event: IncomingEvent,
-    x_api_key: str | None = Header(default=None, description="API-ключ проекта"),
+    session: SessionDep,
+    x_api_key: Annotated[str | None, Header()] = None,
 ) -> EventAccepted:
     """Принять событие от источника.
 
-    Валидация — по схеме IncomingEvent. Ответ 202: событие принято в обработку,
-    результат доставки клиент узнаёт через push, а не через этот ответ.
-    """
-    if not x_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Не передан заголовок X-API-Key",
-        )
+    Ответ 202: событие принято в обработку, а не обработано. Источнику не нужно
+    ждать, пока админ отреагирует — он получит результат по push.
 
-    # TODO(2.3): проверить ключ против проекта и залогировать отказ.
-    # TODO(2.4): дедупликация по resolved_dedup_key — обновить occurrences,
-    #             но не перезапускать уже идущую эскалацию.
-    # TODO(2.6): при status=resolved — остановить таймеры и разослать «проблема устранена».
+    Порядок важен: тело запроса валидируется до проверки ключа. Иначе
+    источник с неверным payload получил бы 401 и решил бы, что проблема
+    в ключе, а не в его собственном запросе.
+    """
+    project = await resolve_project(session, x_api_key)
+
+    alert, created = await ingest_event(session, project, event)
+    await session.commit()
+
     return EventAccepted(
-        alert_id="pending",
-        dedup_key=event.resolved_dedup_key,
+        alert_id=alert.id,
+        dedup_key=alert.dedup_key,
         status=event.status,
-        occurrences=1,
-        duplicate=False,
+        occurrences=alert.occurrences,
+        # duplicate=True означает, что это тот же самый инцидент: эскалация
+        # не перезапускается, растёт только счётчик (задача 2.4).
+        duplicate=not created,
     )

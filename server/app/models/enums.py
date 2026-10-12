@@ -8,6 +8,18 @@
 from enum import StrEnum
 
 
+class Severity(StrEnum):
+    """Уровень алерта.
+
+    Разница между ними не в формулировке, а в поведении:
+    `warning` уважает тихие часы, `critical` — нет. Никто не должен
+    проснуться из-за того, что ночью истёк сертификат.
+    """
+
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
 class AlertState(StrEnum):
     TRIGGERED = "triggered"
     NOTIFYING = "notifying"

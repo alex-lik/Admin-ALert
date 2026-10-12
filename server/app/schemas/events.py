@@ -9,10 +9,11 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-
-class Severity(StrEnum):
-    WARNING = "warning"
-    CRITICAL = "critical"
+# Severity импортируется, а не определяется здесь: значение переходит из
+# HTTP-запроса в ORM-модель и обратно. Два отдельных перечисления дали бы
+# два разных типа с одинаковыми значениями, и сравнение по `is` перестало бы
+# работать — тихо, без ошибки типа.
+from app.models.enums import Severity
 
 
 class EventStatus(StrEnum):

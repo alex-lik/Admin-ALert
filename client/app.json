@@ -2,7 +2,7 @@
   "expo": {
     "name": "Admin-ALert",
     "slug": "admin-alert",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "adminalert",
@@ -39,9 +39,17 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-dev-client",
+      [
+        "expo-dev-client",
+        {
+          "toolsButton": false,
+          "skipOnboarding": true,
+          "showMenuAtLaunch": false
+        }
+      ],
       "@react-native-firebase/app",
-      "./plugins/withNotifeeMavenRepository"
+      "./plugins/withNotifeeMavenRepository",
+      "expo-router"
     ],
     "extra": {
       "apiUrl": "http://10.0.2.2:8080/api/v1"

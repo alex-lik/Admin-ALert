@@ -20,6 +20,49 @@
 
 ## [Unreleased]
 
+### Added
+- Клиент: Expo SDK 57 + React Native 0.86, сборка через development build
+  (`expo-dev-client`). Expo Go не подходит — нужны каналы с `bypassDnd`,
+  точные будильники и Kotlin-модуль.
+- `client/src/notifications/channels.ts` — каналы `warning` / `critical` /
+  `critical-vip` с обходом DND, вибрацией, публичной видимостью на lock screen;
+  категории `alarm`/`call` и `fullScreenAction`; локальная эскалация через
+  `setAlarmClock` с шагами 1/2/3 мин и отменой при ack (задачи 3.6–3.8, 3.10).
+- `client/src/notifications/fcm.ts` — получение FCM-токена, `onTokenRefresh`,
+  регистрация устройства на сервере, фоновый обработчик сообщений (3.4).
+- `client/App.tsx` — экран диагностики: разрешения, состояние каналов, токен,
+  кнопки тестовых алертов (3.13).
+- `client/app.json` — разрешения Android из плана (exact alarms, full-screen intent,
+  игнорирование оптимизации батареи, foreground service).
+- `client/plugins/withNotifeeMavenRepository.js` — config plugin, добавляющий
+  maven-репозиторий Notifee при `expo prebuild`. Без него сборка падает с
+  `Could not find any matches for app.notifee:core:+`: Android-ядро Notifee
+  вкомпоновано в пакет и не лежит ни в Google Maven, ни в Maven Central.
+- `make client-check` (типы + `expo-doctor`) и `make android` в корневом `Makefile`.
+
+### Known limitations
+- FCM не работает: Firebase-проект ещё не создан (задача 1.7), в `client/`
+  лежит placeholder `google-services.json`. Он нужен только чтобы Gradle собрался,
+  в репозиторий не коммитится. Экран диагностики честно показывает это в строке
+  «FCM-токен».
+- У каналов не настроен звук `USAGE_ALARM` (остальная часть задачи 3.7):
+  сейчас `sound: 'default'` через `STREAM_NOTIFICATION`. Нужен ресурс в `res/raw`
+  и config plugin — вместе с Kotlin-модулем из задачи 3.11.
+- `expo-doctor` помечает `@notifee/react-native` как Unmaintained. Оставлено
+  осознанно: альтернативы не дают контроля над каналами, `bypassDnd` и
+  alarm-потоком, ради которых существует задача 3.7. Помечено исключением.
+- `bypassDnd` не проверен: на эмуляторе он всегда `false`, в том числе у каналов
+  Google Dialer. Проверяется на реальных устройствах (3.12, 5.3).
+
+### Fixed
+- `vibrationPattern` содержал нечётное число элементов, из-за чего Notifee
+  отклонял канал и `critical` / `critical-vip` не создавались вообще. Теперь
+  чётное число положительных значений. Поймано на устройстве, а не при сборке.
+- `asForegroundService: true` в тестовых уведомлениях приводил к тому, что они
+  показывались и тут же снимались системой. Флаг перенесён на момент появления
+  нативного foreground service (задача 3.11).
+
+
 ## [0.1.0] - 2026-10-12
 
 ### Added

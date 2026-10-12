@@ -1,6 +1,6 @@
 [project]
 name = "admin-alert-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "Admin-ALert: приём алертов, дедупликация и эскалация на дежурных админов"
 requires-python = ">=3.11"
 dependencies = [

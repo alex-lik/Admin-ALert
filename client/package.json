@@ -1,6 +1,6 @@
 {
   "name": "admin-alert-client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "index.ts",
   "dependencies": {
     "@notifee/react-native": "^9.1.8",

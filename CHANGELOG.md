@@ -20,6 +20,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-12
+
 ### Added
 - Клиент: Expo SDK 57 + React Native 0.86, сборка через development build
   (`expo-dev-client`). Expo Go не подходит — нужны каналы с `bypassDnd`,

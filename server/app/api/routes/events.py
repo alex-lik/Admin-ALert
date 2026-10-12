@@ -2,11 +2,11 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Header, HTTPException, status
 
 from app.api.deps import SessionDep, resolve_project
 from app.schemas.events import EventAccepted, IncomingEvent
-from app.services.alerts import ingest_event
+from app.services.alerts import AlertError, ingest_event
 
 router = APIRouter()
 
@@ -28,7 +28,13 @@ async def receive_event(
     """
     project = await resolve_project(session, x_api_key)
 
-    alert, created = await ingest_event(session, project, event)
+    try:
+        alert, created = await ingest_event(session, project, event)
+    except AlertError as exc:
+        # Единственный случай: resolved без истории. Выдумывать алерт
+        # не будем — источнику честный 404, а не пустой ответ.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
     await session.commit()
 
     return EventAccepted(

@@ -367,6 +367,103 @@ async def test_alert_detail_includes_escalation_history(
     assert history[0]["target"] == "Дежурный"
 
 
+async def test_resolve_stops_timers(
+    client: AsyncClient, session: AsyncSession, project: Project, admin
+) -> None:
+    alert = await make_alert(session, project)
+    tokens = await login(client)
+
+    response = await client.post(f"/api/v1/alerts/{alert.id}/resolve", headers=auth_headers(tokens))
+    assert response.status_code == 200
+    assert response.json()["state"] == "resolved"
+
+    reread = await client.get(f"/api/v1/alerts/{alert.id}", headers=auth_headers(tokens))
+    assert reread.json()["state"] == "resolved"
+
+
+async def test_resolved_event_closes_alert_over_http(
+    client: AsyncClient, session: AsyncSession, project: Project, admin
+) -> None:
+    """Источник прислал resolved: таймеры остановлены, дальше тишина."""
+    payload = {
+        "project": project.name,
+        "host": "host-01",
+        "check": "disk_space",
+        "severity": "critical",
+        "summary": "Диск заполнен",
+    }
+    await client.post("/api/v1/events", json=payload, headers={"X-API-Key": "key-api"})
+
+    resolved = await client.post(
+        "/api/v1/events",
+        json={**payload, "status": "resolved"},
+        headers={"X-API-Key": "key-api"},
+    )
+    assert resolved.status_code == 202
+    assert resolved.json()["duplicate"] is True
+
+    tokens = await login(client)
+    listed = await client.get("/api/v1/alerts?only_active=true", headers=auth_headers(tokens))
+    assert listed.json()["total"] == 0
+
+
+async def test_resolved_without_history_returns_404(
+    client: AsyncClient, session: AsyncSession, project: Project
+) -> None:
+    payload = {
+        "project": project.name,
+        "host": "ghost",
+        "check": "disk_space",
+        "severity": "critical",
+        "summary": "Диск заполнен",
+        "status": "resolved",
+    }
+    response = await client.post("/api/v1/events", json=payload, headers={"X-API-Key": "key-api"})
+    assert response.status_code == 404
+
+
+async def test_reassign_reopens_acked_alert_over_http(
+    client: AsyncClient, session: AsyncSession, project: Project, admin
+) -> None:
+    from app.services.auth import register_admin as _register
+
+    alert = await make_alert(session, project)
+    tokens = await login(client)
+    headers = auth_headers(tokens)
+
+    await client.post(f"/api/v1/alerts/{alert.id}/ack", headers=headers)
+    second = await _register(session, "second@utax.top", "Второй", "verysecret123")
+
+    response = await client.post(
+        f"/api/v1/alerts/{alert.id}/reassign",
+        json={"admin_id": second.id},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reopened"] is True
+    assert body["state"] == "notifying"
+
+    detail = await client.get(f"/api/v1/alerts/{alert.id}", headers=headers)
+    history = detail.json()["escalation_history"]
+    assert any(step["channel"] == "reassign" for step in history)
+
+
+async def test_reassign_unknown_admin_returns_404(
+    client: AsyncClient, session: AsyncSession, project: Project, admin
+) -> None:
+    alert = await make_alert(session, project)
+    tokens = await login(client)
+
+    response = await client.post(
+        f"/api/v1/alerts/{alert.id}/reassign",
+        json={"admin_id": "adm_missing"},
+        headers=auth_headers(tokens),
+    )
+    assert response.status_code == 404
+
+
 async def test_unknown_alert_returns_404(
     client: AsyncClient, session: AsyncSession, project: Project, admin
 ) -> None:

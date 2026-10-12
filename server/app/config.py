@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Таймеры живут в БД (next_action_at), воркер только опрашивает — так они переживают рестарт.
     worker_poll_interval_seconds: int = 5
     worker_batch_size: int = 100
+    # Устройство считается молчащим, если heartbeat старше этого. Молчащий
+    # телефон push не ждёт: шаг помечается сорванным, эскалация ускоряется
+    # в сторону звонка (задача 2.21).
+    heartbeat_stale_seconds: int = 900
 
     # --- приём событий ---
     events_rate_limit_per_minute: int = 600

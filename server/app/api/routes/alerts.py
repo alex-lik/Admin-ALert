@@ -169,7 +169,12 @@ async def reassign_alert_route(
     alert_id: Annotated[str, Path()],
     payload: ReassignRequest,
 ) -> dict[str, object]:
-    """Передать алерт другому админу."""
+    """Передать алерт другому админу.
+
+    Подтверждённый алерт при передаче переоткрывается: чужое подтверждение
+    новый владелец не видел и должен подтвердить сам. Таймеры и шаг при этом
+    не трогаются — эскалация продолжается с того же места.
+    """
     from app.services import auth as auth_service
 
     alert = await _load_alert(session, alert_id)
@@ -178,21 +183,58 @@ async def reassign_alert_route(
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Админ не найден")
 
-    # Передача — это не то же самое, что подтверждение: эскалация продолжается,
-    # просто адресат меняется. Поэтому current_step и таймер не трогаем.
-    alert.acked_by_id = None
+    try:
+        reopened = await alerts_service.reassign_alert(
+            session, alert, target.id, target.name, admin.name, payload.comment
+        )
+    except alerts_service.AlertError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     await session.commit()
 
     return {
         "alert_id": alert.id,
+        "state": alert.state,
         "reassigned_to": target.name,
         "reassigned_by": admin.name,
+        "reopened": reopened,
         "comment": payload.comment,
     }
 
 
+@router.post("/{alert_id}/resolve")
+async def resolve_alert_route(
+    session: SessionDep,
+    _admin: CurrentAdmin,
+    alert_id: Annotated[str, Path()],
+) -> dict[str, object]:
+    """Устранить алерт вручную: остановить таймеры (задача 2.6).
+
+    Основной путь закрытия — событие `resolved` от источника через
+    `POST /events`. Ручное закрытие нужно для ложных срабатываний и для
+    случаев, когда источник resolved не прислал.
+    """
+    alert = await _load_alert(session, alert_id)
+
+    try:
+        await alerts_service.resolve_alert(session, alert)
+    except alerts_service.AlertError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await session.commit()
+
+    return {"alert_id": alert.id, "state": alert.state}
+
+
 async def _load_alert(session: SessionDep, alert_id: str) -> Alert:
-    """Загрузить алерт со связями — без них карточка не соберётся."""
+    """Загрузить алерт со связями — без них карточка не соберётся.
+
+    `populate_existing=True` обязателен: если сессия уже держит этот алерт
+    (например, его только что изменили в этом же запросе или сессия
+    переиспользуется), без этого флага selectinload вернёт закэшированный
+    состав шагов, а не текущий из БД. Детальный экран обязан показывать
+    факты, а не кэш.
+    """
     from sqlalchemy import select
 
     result = await session.execute(
@@ -205,6 +247,7 @@ async def _load_alert(session: SessionDep, alert_id: str) -> Alert:
             selectinload(Alert.acked_by),
             selectinload(Alert.steps),
         )
+        .execution_options(populate_existing=True)
     )
     alert = result.scalar_one_or_none()
 

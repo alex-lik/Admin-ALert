@@ -3,13 +3,20 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.entities import Alert, AlertStep, Check, Host, Project
+from app.models.entities import (
+    Alert,
+    AlertStep,
+    Check,
+    EscalationStepDefinition,
+    Host,
+    Project,
+)
 from app.models.enums import AlertState, Severity, can_transition
-from app.schemas.events import IncomingEvent
+from app.schemas.events import EventStatus, IncomingEvent
 
 
 class AlertError(RuntimeError):
@@ -22,6 +29,18 @@ def new_id(prefix: str) -> str:
 
 def now() -> datetime:
     return datetime.now(UTC)
+
+
+def coerce_aware(value: datetime) -> datetime:
+    """Привести метку к UTC-aware.
+
+    SQLite не хранит часовой пояс: прочитанное из dev-базы наивное время
+    сравнивать с `now()` напрямую нельзя — упадёт с TypeError. Считаем
+    наивное время UTC: мы сами туда только UTC и пишем.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 # ───────────────────────────── Справочники ─────────────────────────────
@@ -98,6 +117,10 @@ async def ingest_event(
     )
     alert = result.scalar_one_or_none()
 
+    # Источник сообщает, что проблема устранена (задача 2.6).
+    if event.status is EventStatus.RESOLVED:
+        return await _ingest_resolved(session, dedup_key, alert)
+
     if alert is not None:
         # Повтор по dedup_key. Ключевое: current_step и next_action_at не
         # трогаем, иначе шторм собырий бесконечно откладывал бы эскалацию.
@@ -132,7 +155,57 @@ async def ingest_event(
     )
     session.add(alert)
     await session.flush()
+    await _arm_first_timer(session, alert)
     return alert, True
+
+
+async def _arm_first_timer(session: AsyncSession, alert: Alert) -> None:
+    """Взвести таймер первого шага сразу при создании алерта.
+
+    Без этого воркер новый алерт никогда не увидит: он выбирает только
+    записи с установленным `next_action_at`. Профиль без шагов — вырожденный
+    случай: ставим «сейчас», и первый же проход воркера признает такой алерт
+    истёкшим вместо того, чтобы оставить его висеть вечно.
+    """
+    result = await session.execute(
+        select(EscalationStepDefinition)
+        .where(EscalationStepDefinition.profile_id == alert.profile_id)
+        .order_by(EscalationStepDefinition.step)
+        .limit(1)
+    )
+    first = result.scalar_one_or_none()
+    if first is None:
+        alert.next_action_at = now()
+    else:
+        alert.next_action_at = alert.first_seen_at + timedelta(seconds=first.delay_seconds)
+    await session.flush()
+
+
+async def _ingest_resolved(
+    session: AsyncSession, dedup_key: str, alert: Alert | None
+) -> tuple[Alert, bool]:
+    """Закрыть алерт по событию resolved: остановить таймеры (задача 2.6).
+
+    `created` всегда False: resolved никогда не создаёт алерт, он только
+    закрывает. Если активного алерта нет, возвращаем последний из истории
+    для информации — источнику есть на что сослаться, и счётчик при этом
+    не растёт. Если и истории нет — источнику честный 404 через AlertError,
+    а не выдуманный алерт.
+    """
+    if alert is None:
+        history = await session.execute(
+            select(Alert)
+            .where(Alert.dedup_key == dedup_key)
+            .order_by(Alert.last_seen_at.desc())
+            .limit(1)
+        )
+        previous = history.scalar_one_or_none()
+        if previous is None:
+            raise AlertError(f"нет алерта с ключом {dedup_key}: закрывать нечего")
+        return previous, False
+
+    await transition(session, alert, AlertState.RESOLVED)
+    return alert, False
 
 
 async def resolve_profile_id(session: AsyncSession, project: Project, severity: Severity) -> str:
@@ -157,7 +230,6 @@ async def transition(
     target: AlertState,
     *,
     next_action_at: datetime | None = None,
-    note: str | None = None,
 ) -> Alert:
     """Перевести алерт в новое состояние с проверкой допустимости перехода."""
     current = AlertState(alert.state)
@@ -180,7 +252,6 @@ async def transition(
         alert.next_action_at = None
 
     await session.flush()
-    del note
     return alert
 
 
@@ -242,13 +313,30 @@ async def snooze_alert(session: AsyncSession, alert: Alert, minutes: int) -> dat
     """Отложить эскалацию.
 
     Ограничения намеренно жёсткие (задача 2.14): иначе дежурный откладывает
-    всё подряд и система перестаёт пейджить.
+    всё подряд и система перестаёт пейджить. Лимита два: не дольше 30 минут
+    за раз и не чаще 2 раз в час на алерт — второе считается по записям
+    аудита, отдельный счётчик не нужен.
     """
     if AlertState(alert.state) is AlertState.RESOLVED:
         raise AlertError("алерт уже устранён")
 
     if minutes > 30:
         raise AlertError("отложить дольше 30 минут нельзя")
+
+    hour_ago = now() - timedelta(hours=1)
+    recent_snoozes = (
+        await session.execute(
+            select(func.count())
+            .select_from(AlertStep)
+            .where(
+                AlertStep.alert_id == alert.id,
+                AlertStep.channel == "snooze",
+                AlertStep.created_at >= hour_ago,
+            )
+        )
+    ).scalar_one()
+    if recent_snoozes >= 2:
+        raise AlertError("исчерпан лимит откладываний: не больше 2 раз в час на алерт")
 
     until = now() + timedelta(minutes=minutes)
     alert.snoozed_until = until
@@ -269,9 +357,57 @@ async def snooze_alert(session: AsyncSession, alert: Alert, minutes: int) -> dat
     return until
 
 
-async def resolve_alert(session: AsyncSession, alert: Alert, note: str | None = None) -> Alert:
-    """Устранить алерт: остановить таймеры (задача 2.6)."""
-    return await transition(session, alert, AlertState.RESOLVED, note=note)
+async def resolve_alert(session: AsyncSession, alert: Alert) -> Alert:
+    """Устранить алерт вручную: остановить таймеры (задача 2.6)."""
+    return await transition(session, alert, AlertState.RESOLVED)
+
+
+async def reassign_alert(
+    session: AsyncSession,
+    alert: Alert,
+    target_admin_id: str,
+    target_admin_name: str,
+    by_admin_name: str,
+    comment: str | None = None,
+) -> bool:
+    """Передать алерт другому админу.
+
+    Возвращает True, если алерт был переоткрыт. Переоткрытие нужно только
+    для подтверждённого алерта: чужое подтверждение новый владелец не видел,
+    поэтому должен подтвердить сам. Таймеры и шаг при этом не трогаем —
+    эскалация продолжается с того же места, меняется только владелец.
+
+    Передача пишется в аудит каналом `reassign`: иначе теряется ответ на
+    вопрос «кому сейчас принадлежит алерт».
+    """
+    if AlertState(alert.state) is AlertState.RESOLVED:
+        raise AlertError("алерт уже устранён")
+
+    reopened = False
+    if AlertState(alert.state) is AlertState.ACKED:
+        alert.acked_at = None
+        alert.acked_by_id = None
+        await transition(session, alert, AlertState.NOTIFYING)
+        reopened = True
+
+    note = f"Передан {target_admin_name} ({by_admin_name})"
+    if comment:
+        note = f"{note}. {comment}"
+
+    session.add(
+        AlertStep(
+            id=new_id("stp"),
+            alert_id=alert.id,
+            step=alert.current_step,
+            channel="reassign",
+            target_admin_id=target_admin_id,
+            target_label=target_admin_name,
+            outcome="delivered",
+            note=note,
+        )
+    )
+    await session.flush()
+    return reopened
 
 
 # ───────────────────────────── Выборка ─────────────────────────────
@@ -299,17 +435,37 @@ async def list_alerts(
     elif state is not None:
         conditions.append(Alert.state == state)
 
-    stmt = select(Alert).options(
-        selectinload(Alert.project),
-        selectinload(Alert.host),
-        selectinload(Alert.check),
-        selectinload(Alert.acked_by),
+    stmt = (
+        select(Alert)
+        .join(Project, Alert.project_id == Project.id)
+        .options(
+            selectinload(Alert.project),
+            selectinload(Alert.host),
+            selectinload(Alert.check),
+            selectinload(Alert.acked_by),
+        )
     )
     if conditions:
         stmt = stmt.where(*conditions)
 
+    # Порядок — как на экране дежурного в клиенте: активные → VIP →
+    # критичность → время. Если сервер отдаёт иначе, список «прыгает»
+    # после каждой синхронизации.
+    stmt = stmt.order_by(
+        case(
+            (
+                Alert.state.in_([AlertState.TRIGGERED, AlertState.NOTIFYING, AlertState.ESCALATED]),
+                0,
+            ),
+            else_=1,
+        ),
+        case((Project.is_vip.is_(True), 0), else_=1),
+        case((Alert.severity == Severity.CRITICAL, 0), else_=1),
+        Alert.last_seen_at.desc(),
+    )
+
     result = await session.execute(
-        stmt.order_by(Alert.last_seen_at.desc()).limit(limit).offset(offset)
+        stmt.limit(limit).offset(offset).execution_options(populate_existing=True)
     )
     alerts = list(result.scalars().unique())
 

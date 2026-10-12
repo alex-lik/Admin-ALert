@@ -29,10 +29,21 @@ class AlertState(StrEnum):
     EXPIRED = "expired"
 
 
-TERMINAL_STATES = frozenset({AlertState.ACKED, AlertState.RESOLVED, AlertState.EXPIRED})
+# Состояния, из которых нет выхода. ACKED здесь нет намеренно: подтверждённый
+# алерт переоткрывается передачей другому (reassign), поэтому он «закрыт,
+# но не терминален». Воркер такие алерты не трогает — у них нет таймера.
+TERMINAL_STATES = frozenset({AlertState.RESOLVED, AlertState.EXPIRED})
 
 ALLOWED_TRANSITIONS: dict[AlertState, frozenset[AlertState]] = {
-    AlertState.TRIGGERED: frozenset({AlertState.NOTIFYING, AlertState.ACKED, AlertState.RESOLVED}),
+    AlertState.TRIGGERED: frozenset(
+        {
+            AlertState.NOTIFYING,
+            AlertState.ACKED,
+            AlertState.RESOLVED,
+            # Профиль без шагов: эскалировать нечего, алерт сразу истёк.
+            AlertState.EXPIRED,
+        }
+    ),
     AlertState.NOTIFYING: frozenset(
         {
             AlertState.NOTIFYING,  # следующий шаг той же эскалации
@@ -45,7 +56,14 @@ ALLOWED_TRANSITIONS: dict[AlertState, frozenset[AlertState]] = {
     AlertState.ESCALATED: frozenset(
         {AlertState.NOTIFYING, AlertState.RESOLVED, AlertState.EXPIRED}
     ),
-    AlertState.ACKED: frozenset({AlertState.RESOLVED}),
+    AlertState.ACKED: frozenset(
+        {
+            AlertState.RESOLVED,
+            # Передача алерта другому админу снимает чужое подтверждение:
+            # новый владелец проблему ещё не видел и должен подтвердить сам.
+            AlertState.NOTIFYING,
+        }
+    ),
     AlertState.RESOLVED: frozenset(),
     AlertState.EXPIRED: frozenset(),
 }

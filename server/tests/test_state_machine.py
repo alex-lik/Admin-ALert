@@ -15,6 +15,11 @@ from app.models.enums import TERMINAL_STATES, AlertState, can_transition
         (AlertState.NOTIFYING, AlertState.EXPIRED),
         (AlertState.ESCALATED, AlertState.RESOLVED),
         (AlertState.ACKED, AlertState.RESOLVED),
+        # Передача другому снимает чужое подтверждение: новый владелец
+        # должен подтвердить сам, поэтому возврат в notifying легален.
+        (AlertState.ACKED, AlertState.NOTIFYING),
+        # Профиль без шагов: эскалировать нечего, алерт сразу истёк.
+        (AlertState.TRIGGERED, AlertState.EXPIRED),
     ],
 )
 def test_allowed_transitions(current: AlertState, target: AlertState) -> None:
@@ -26,7 +31,6 @@ def test_allowed_transitions(current: AlertState, target: AlertState) -> None:
     [
         (AlertState.RESOLVED, AlertState.NOTIFYING),  # resolve необратим
         (AlertState.EXPIRED, AlertState.NOTIFYING),  # лимит повторов исчерпан
-        (AlertState.ACKED, AlertState.NOTIFYING),  # ack останавливает цепочку
     ],
 )
 def test_forbidden_transitions(current: AlertState, target: AlertState) -> None:

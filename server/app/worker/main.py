@@ -3,6 +3,8 @@
 Принцип: таймеры не живут в памяти. У каждого активного алерта есть next_action_at
 в БД; воркер раз в N секунд выбирает просроченные записи, выполняет шаг и
 планирует следующий. Поэтому перезапуск воркера не теряет эскалацию.
+
+Вся логика — в `app.services.escalation` (там же тесты). Здесь только цикл.
 """
 
 import asyncio
@@ -13,14 +15,18 @@ logger_name = "admin-alert.worker"
 
 
 async def poll_once() -> int:
-    """Один проход: вернуть количество обработанных алертов.
+    """Один проход: вернуть количество обработанных алертов."""
+    from app.db import SessionLocal
+    from app.services import escalation
 
-    Выборка должна идти с блокировкой строк (SELECT ... FOR UPDATE SKIP LOCKED),
-    иначе два воркера выполнят один шаг дважды (задача 2.8).
-    """
-    # TODO(2.7): выбрать алерты с next_action_at <= now, выполнить шаг, запланировать следующий.
-    # TODO(2.9): по исчерпании лимита повторов перевести алерт в expired.
-    return 0
+    settings = get_settings()
+    async with SessionLocal() as session:
+        return await escalation.poll_once(
+            session,
+            use_lock=settings.database_url.startswith("postgresql"),
+            batch_size=settings.worker_batch_size,
+            heartbeat_stale_seconds=settings.heartbeat_stale_seconds,
+        )
 
 
 async def run() -> None:

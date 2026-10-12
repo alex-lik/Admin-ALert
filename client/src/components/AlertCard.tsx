@@ -13,6 +13,7 @@ const CHANNEL_LABELS: Record<EscalationStep['channel'], string> = {
   telegram: 'Telegram',
   call: 'Звонок',
   snooze: 'Snooze',
+  reassign: 'Передача',
 };
 
 const OUTCOME_LABELS: Record<EscalationStep['outcome'], { label: string; color: string }> = {

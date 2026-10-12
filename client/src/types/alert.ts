@@ -33,8 +33,8 @@ export type EscalationStep = {
   id: string;
   /** Номер шага, начиная с 1. */
   step: number;
-  /** Что было сделано: push / telegram / call. */
-  channel: 'push' | 'telegram' | 'call' | 'snooze';
+  /** Что было сделано: push / telegram / call / snooze / reassign. */
+  channel: 'push' | 'telegram' | 'call' | 'snooze' | 'reassign';
   /** Кому адресован шаг. */
   target: string;
   at: string;

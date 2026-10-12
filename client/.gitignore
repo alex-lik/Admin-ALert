@@ -1,0 +1,54 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+# Continuous Native Generation: android/ и ios/ создаются из app.json
+# командой `npx expo prebuild`. В git их не коммитим — иначе правки
+# конфигурации перестанут доезжать до нативных проектов.
+/ios
+/android
+
+# Путь к Android SDK на конкретной машине. Машинно-зависимый файл,
+# в репозитории ему не место.
+/android/local.properties
+
+# Google Services для FCM.
+# В файле нет секретов (только публичные идентификаторы проекта), поэтому
+# реальный google-services.json коммитить можно. Но пока Firebase-проект
+# не создан (задача 1.7), лежит placeholder — он в репозиторий не пойдёт.
+google-services.json

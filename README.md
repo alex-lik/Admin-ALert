@@ -23,7 +23,7 @@ Alertmanager / Uptime Kuma / Zabbix / curl
 | Путь | Что внутри | Состояние |
 |---|---|---|
 | `server/` | FastAPI, модели, воркер эскалации, адаптеры, `POST /events` | каркас |
-| `client/` | React Native приложение админа (FCM/APNs + Notifee) | каркас |
+| `client/` | Expo SDK 57 + React Native 0.86: каналы Android, FCM, диагностика | собирается и запускается |
 | `desktop-agent/` | Агент для сценария «диск заполнен» | каркас |
 | `docs/` | План, архитектура, ADR | живой документ |
 | `tools/release.py` | SemVer + Conventional Commits | рабочий |

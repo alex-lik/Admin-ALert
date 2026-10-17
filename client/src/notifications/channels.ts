@@ -199,6 +199,56 @@ export async function sendTestAlert(channel: ChannelIdValue): Promise<string> {
 }
 
 /**
+ * Показать уведомление, пришедшее с сервера (задачи 2.16–2.17).
+ *
+ * Отдельная функция, а не переиспользование `sendTestAlert`: у теста
+ * фиксированный текст и он намеренно бьёт по DND, чтобы проверить канал. Здесь
+ * текст и канал приходят с сервера, а повторы задаёт профиль эскалации — то
+ * есть повторный шаг может прийти в канале `warning` и не должен снова будить.
+ *
+ * `alertId` в id уведомления даёт две вещи. Повторный шаг того же алерта с тем
+ * же id перезапишет уведомление, а не наложит второе поверх — иначе шторка
+ * забивается «Диск заполнен» ×5. И по нему работают `cancelEscalation` и
+ * обработчик нажатий.
+ */
+export async function displayAlertNotification(params: {
+  alertId: string;
+  channel: ChannelIdValue;
+  title: string;
+  body: string;
+  occurrences?: number;
+  resolved?: boolean;
+}): Promise<string> {
+  const isCritical = params.channel !== ChannelId.warning;
+  const occurrences = params.occurrences ?? 1;
+  const suffix = occurrences > 1 ? ` (повтор ${occurrences})` : '';
+
+  await notifee.displayNotification({
+    // Отдельный id для «устранено»: тот же alertId перезаписал бы зелёное
+    // сообщение тревожным красным.
+    id: `${params.alertId}:${params.resolved ? 'resolved' : 'alert'}`,
+    title: params.resolved ? 'Проблема устранена' : params.title,
+    body: params.resolved ? params.body : `${params.body}${suffix}`,
+    android: {
+      channelId: params.channel,
+      pressAction: { id: 'default', launchActivity: 'default' },
+      importance: AndroidImportance.HIGH,
+      category: isCritical ? AndroidCategory.CALL : AndroidCategory.REMINDER,
+      fullScreenAction: isCritical ? { id: 'alert-fullscreen' } : undefined,
+      autoCancel: false,
+      // Устранённое — хорошая новость, и висеть тревожным красным поверх
+      // экрана блокировки она не должна.
+      color: params.resolved ? '#2E7D32' : '#FF2D2D',
+      visibility: AndroidVisibility.PUBLIC,
+      groupId: params.resolved ? undefined : 'alerts',
+    },
+    data: { alertId: params.alertId, type: params.resolved ? 'resolved' : 'alert' },
+  });
+
+  return `показано в канале ${params.channel}`;
+}
+
+/**
  * Локальная эскалация через setAlarmClock (задача 3.10):
  * усиление через 1, 2, 3 минуты. Отменяется при ack.
  *

@@ -7,13 +7,20 @@
 
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AppText } from '../components/ui';
+import { installPushHandlers } from '../notifications/install';
 import { palette } from '../theme';
 
 export default function RootLayout() {
+  // Поднимаем обработчики push один раз при монтировании корня. Здесь, а не на
+  // экране списка: уведомление может прийти, пока ни один экран не открыт, и
+  // обработчик на экране тогда просто ещё не существовал бы.
+  useEffect(() => installPushHandlers(), []);
+
   return (
     <SafeAreaProvider>
       <View style={styles.root}>

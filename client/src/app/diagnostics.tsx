@@ -26,7 +26,8 @@ import {
   sendTestAlert,
   type DiagnosticsEntry,
 } from '../notifications/channels';
-import { fetchToken, subscribeToMessaging } from '../notifications/fcm';
+import { fetchToken, parsePushData, subscribeToMessaging } from '../notifications/fcm';
+import { showPushAlert } from '../notifications/install';
 import { palette, spacing, stateColors } from '../theme';
 
 type Line = { label: string; value: string; ok: boolean | null };
@@ -82,7 +83,11 @@ export default function DiagnosticsScreen() {
     try {
       unsubscribeMessaging = subscribeToMessaging({
         onToken: (token) => append(`токен обновлён: ${token.slice(0, 20)}…`),
-        onMessage: (title, body) => append(`push: ${title} — ${body}`),
+        onMessage: (data, remote) =>
+          append(
+            `push${remote ? ' (фон)' : ''}: [${data.channel}] ${data.project} · ${data.host} — ` +
+              `${data.summary}${data.occurrences > 1 ? ` (повтор ${data.occurrences})` : ''}`,
+          ),
         onError: (error) => append(`FCM ошибка: ${error}`),
       });
     } catch {
@@ -112,6 +117,38 @@ export default function DiagnosticsScreen() {
     },
     [append],
   );
+
+  /**
+   * Прогнать уведомление тем же кодом, каким пришёл бы настоящий push.
+   *
+   * Отдельный пункт диагностики, потому что проверить «приходит ли push» и
+   * «правильно ли приложение его рисует» — разные вещи. Если этот пункт зелёный,
+   * а реальный push не приходит, дело в Firebase-проекте, а не в приложении.
+   */
+  const testServerPayload = useCallback(async () => {
+    setBusy(true);
+    try {
+      const raw = parsePushData({
+        type: 'alert',
+        alert_id: 'test-alert-id',
+        channel: 'critical',
+        project: 'flytaxi',
+        host: 'db-master-01',
+        check: 'disk_space',
+        severity: 'critical',
+        summary: 'Диск заполнен на 95%',
+        detail: 'flytaxi · db-master-01',
+        occurrences: '3',
+        sent_at: new Date().toISOString(),
+      });
+      await showPushAlert(raw);
+      append(`показано как пришло бы с сервера: [${raw.channel}] ${raw.summary} (повтор ${raw.occurrences})`);
+    } catch (error) {
+      append(`ошибка: ${describe(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [append]);
 
   const testEscalation = useCallback(async () => {
     setBusy(true);
@@ -205,6 +242,13 @@ export default function DiagnosticsScreen() {
             label="Эскалация 1 / 2 / 3 мин"
             variant="outline"
             onPress={testEscalation}
+            disabled={busy}
+            fullWidth
+          />
+          <Button
+            label="Payload с сервера"
+            variant="ghost"
+            onPress={testServerPayload}
             disabled={busy}
             fullWidth
           />

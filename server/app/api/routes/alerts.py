@@ -1,5 +1,6 @@
 """HTTP-слой алертов: список, карточка, ack / snooze / reassign (задачи 2.14, 3.2)."""
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
@@ -24,6 +25,27 @@ from app.schemas.alerts import (
 from app.services import alerts as alerts_service
 
 router = APIRouter()
+
+
+async def _notify_resolved(alert_id: str) -> str:
+    """Отправить «проблема устранена» и вернуть итог для ответа.
+
+    Уведомление — после коммита состояния и всегда best-effort: resolve не
+    должен превращаться в ошибку из-за того, что у Google сеть легла.
+    """
+    from app.config import get_settings
+    from app.services import dispatch
+
+    dispatcher = dispatch.make_dispatcher(get_settings())
+    try:
+        return await dispatch.notify_resolved(dispatcher, alert_id)
+    except Exception:  # noqa: BLE001 — см. докстроку
+        logging.getLogger("admin-alert.alerts").exception(
+            "уведомление о resolved не отправлено: alert=%s", alert_id
+        )
+        return "failed"
+    finally:
+        await dispatcher.aclose()
 
 
 def _to_brief(alert: Alert) -> AlertBrief:
@@ -223,7 +245,9 @@ async def resolve_alert_route(
 
     await session.commit()
 
-    return {"alert_id": alert.id, "state": alert.state}
+    notified = await _notify_resolved(alert.id)
+
+    return {"alert_id": alert.id, "state": alert.state, "notified": notified}
 
 
 async def _load_alert(session: SessionDep, alert_id: str) -> Alert:

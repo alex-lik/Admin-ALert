@@ -12,6 +12,10 @@ dependencies = [
     "asyncpg>=0.30",
     "alembic>=1.14",
     "redis>=5.2",
+    "httpx>=0.28",
+    # Единственная причина — подпись JWT для FCM (RS256). Стандартной
+    # библиотеке это неподвластно, а Google требует именно подпись.
+    "cryptography>=44",
 ]
 
 [build-system]

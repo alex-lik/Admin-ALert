@@ -206,10 +206,18 @@ async def process_due_alert(
     """
     moment = now()
 
+    # Профиль со шагами нужен движку, project и host — диспетчеру: из них он
+    # собирает текст уведомления. Всё грузим явно: ленивая загрузка на
+    # AsyncSession запрещена и падает с MissingGreenlet ровно в момент отправки.
     result = await session.execute(
         select(Alert)
         .where(Alert.id == alert_id)
-        .options(selectinload(Alert.profile).selectinload(EscalationProfile.steps))
+        .options(
+            selectinload(Alert.profile).selectinload(EscalationProfile.steps),
+            selectinload(Alert.project),
+            selectinload(Alert.host),
+            selectinload(Alert.check),
+        )
     )
     alert = result.scalar_one_or_none()
     if alert is None:

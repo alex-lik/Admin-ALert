@@ -139,8 +139,11 @@ In-memory таймеры не используются. У активного а
 1. Выбирает алерты с `next_action_at <= now` **с блокировкой строк**
    (`SELECT ... FOR UPDATE SKIP LOCKED` на Postgres) — иначе два воркера
    выполнят один шаг дважды. На SQLite блокировок нет, там один воркер.
-2. Выполняет шаг через Dispatcher. Пока каналы не подключены, работает
-   NullDispatcher: шаги помечаются `skipped`, а не выдуманным `delivered`.
+2. Выполняет шаг через Dispatcher (`app/services/dispatch.py`). Push уходит в
+   FCM HTTP v1 — data-only с `priority: high`, чтобы уведомление построил сам
+   клиент в нужном Android-канале. Каналы Telegram и звонка пока не
+   подключены: такие шаги честно помечаются `skipped`, а не выдуманным
+   `delivered`.
 3. Планирует следующий. После последнего шага — пауза перед `expired`,
    чтобы звонок успел прозвучать.
 
@@ -161,9 +164,12 @@ In-memory таймеры не используются. У активного а
 
 | Путь | Назначение |
 |---|---|
-| `server/app/api/` | HTTP-слой: health, приём событий |
+| `server/app/api/` | HTTP-слой: health, приём событий, алерты |
 | `server/app/models/` | модели и автомат состояний |
 | `server/app/schemas/` | Pydantic-схемы, в т.ч. единый формат события |
+| `server/app/services/escalation.py` | движок: выбор просроченных, шаги, таймеры |
+| `server/app/services/dispatch.py` | отправка шага по каналам |
+| `server/app/services/push.py` | транспорт FCM HTTP v1 |
 | `server/app/worker/` | воркер эскалации |
 | `client/` | React Native приложение админа |
 | `desktop-agent/` | агент для десктопа |

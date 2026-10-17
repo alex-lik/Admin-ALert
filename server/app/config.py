@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     # --- приём событий ---
     events_rate_limit_per_minute: int = 600
 
+    # --- push (задачи 1.7, 2.16–2.18) ---
+    # Файл ключа сервисного аккаунта Firebase. Пусто — FCM не настроен, и воркер
+    # честно пишет в аудите `skipped`, а не выдуманное `delivered`.
+    fcm_service_account_file: str | None = None
+    # Переопределяет project_id из файла, если ключ от другого проекта.
+    fcm_project_id: str | None = None
+    # Critical Alerts на iOS требуют entitlement от Apple. Без него FCM вернёт
+    # BadPriority, и уведомление не дойдёт вовсе — поэтому по умолчанию выключено.
+    apns_critical_alerts: bool = False
+
     @property
     def is_production(self) -> bool:
         return self.environment == "prod"

@@ -34,6 +34,7 @@ from app.models.entities import (
 )
 from app.models.enums import AlertState
 from app.services.alerts import coerce_aware, new_id, now, transition
+from app.services.metrics import metrics
 from app.services.quiet import QuietWindow
 
 logger = logging.getLogger("admin-alert.worker")
@@ -230,6 +231,11 @@ async def poll_once(
             # Один битый алерт не должен останавливать весь проход.
             logger.exception("воркер: алерт %s не обработан", alert_id)
             await session.rollback()
+
+    # Backlog после прохода: если очередь не уменьшилась, эскалация не
+    # работает, и никакие алерты об этом не сообщат — это главная метрика
+    # исправности воркера.
+    metrics.worker_poll(processed, await count_due(session))
     return processed
 
 
@@ -309,6 +315,7 @@ async def process_due_alert(
         until = window.ends_at(moment, target.timezone)
         alert.next_action_at = until
         await session.commit()
+        metrics.alert_deferred_by_quiet_hours()
         logger.info(
             "тихие часы: алерт %s ждёт до %s (профиль %s)",
             alert.id,
@@ -346,6 +353,7 @@ async def process_due_alert(
     )
     alert.current_step = current.step
     await transition(session, alert, AlertState.NOTIFYING)
+    metrics.step(current.channel, outcome)
 
     if outcome == "failed":
         next_at = moment + timedelta(seconds=soon_seconds)

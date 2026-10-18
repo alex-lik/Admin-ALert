@@ -25,6 +25,10 @@ def create_app() -> FastAPI:
         description="Приём алертов, дедупликация и эскалация на дежурных админов",
         lifespan=lifespan,
     )
+    # Настройки в состоянии приложения, а не в замыкании роутеров: webhook
+    # Telegram проверяет секрет и должен видеть ровно ту конфигурацию, с
+    # которой сервер запущен, а не копию, снятую при импорте.
+    app.state.settings = settings
     app.include_router(api_router, prefix="/api/v1")
     return app
 

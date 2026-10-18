@@ -54,8 +54,16 @@ class Target:
 
 
 class Dispatcher(Protocol):
-    async def send(self, channel: str, alert: Alert, target: Target) -> tuple[str, str | None]:
-        """Отправить шаг по каналу. Возвращает (outcome, note)."""
+    async def send(
+        self, channel: str, alert: Alert, target: Target, *, step: int
+    ) -> tuple[str, str | None]:
+        """Отправить шаг по каналу. Возвращает (outcome, note).
+
+        `step` передаётся явно: в момент вызова `alert.current_step` ещё
+        указывает на предыдущий шаг — он обновляется только после отправки, на
+        случай если отправка сорвётся. Читать номер из алерта значило бы
+        показывать дежурному «шаг 1» вместо «шаг 2».
+        """
         ...
 
 
@@ -67,7 +75,10 @@ class NullDispatcher:
     шаги продвигаются, таймеры планируются, лимиты срабатывают.
     """
 
-    async def send(self, channel: str, alert: Alert, target: Target) -> tuple[str, str | None]:
+    async def send(
+        self, channel: str, alert: Alert, target: Target, *, step: int
+    ) -> tuple[str, str | None]:
+        del alert, target, step
         return ("skipped", f"канал {channel}: отправка не подключена")
 
 
@@ -265,7 +276,7 @@ async def process_due_alert(
             "устройство не на связи: heartbeat давно не приходил, шаг пропущен",
         )
     else:
-        outcome, note = await dispatch.send(current.channel, alert, target)
+        outcome, note = await dispatch.send(current.channel, alert, target, step=current.step)
 
     session.add(
         AlertStep(

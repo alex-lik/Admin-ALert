@@ -127,6 +127,10 @@ class Admin(TimestampMixin, Base):
     timezone: Mapped[str] = mapped_column(
         String(64), default="Europe/Kyiv", server_default="Europe/Kyiv", nullable=False
     )
+    # Telegram-чат дежурного (задача 4.8). None — канал не подключён, и шаг
+    # эскалации через Telegram честно помечается skipped, а не delivered.
+    # Хранится строка: chat id бывают и отрицательными (группы), и long.
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
 
     devices: Mapped[list["Device"]] = relationship(
         back_populates="admin", cascade="all, delete-orphan"

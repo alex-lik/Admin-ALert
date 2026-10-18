@@ -12,7 +12,8 @@ import { Link, Stack } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
 
-import { AppText, Card, Chip, Screen, SectionHeader } from '../components/ui';
+import { AppText, Button, Card, Chip, Screen, SectionHeader } from '../components/ui';
+import { TelegramCard } from '../components/TelegramCard';
 import { palette, radius, spacing } from '../theme';
 
 export default function SettingsScreen() {
@@ -46,6 +47,11 @@ export default function SettingsScreen() {
             onChange={setSoundWarning}
             last
           />
+        </Card>
+
+        <SectionHeader title="Telegram" />
+        <Card>
+          <TelegramCard />
         </Card>
 
         <SectionHeader title="Работа с алертами" />

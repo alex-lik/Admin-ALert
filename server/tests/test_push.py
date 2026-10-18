@@ -372,13 +372,16 @@ async def test_dispatcher_without_fcm_is_honest(alert: Alert) -> None:
 
 
 async def test_unconnected_channels_are_skipped(alert: Alert, fcm: FcmClient) -> None:
-    """Telegram и звонок ещё не подключены — честный skipped, не выдуманная доставка."""
+    """Звонок ещё не подключён — честный skipped, не выдуманная доставка.
+
+    Telegram проверяется отдельно, в tests/test_telegram.py: он уже подключён.
+    """
     dispatcher = PushDispatcher(lambda: None, fcm)
 
-    outcome, note = await dispatcher.send("telegram", alert, Target("adm_1", "Дежурный"))
+    outcome, note = await dispatcher.send("call", alert, Target("adm_1", "Дежурный"))
 
     assert outcome == "skipped"
-    assert "telegram" in (note or "")
+    assert "call" in (note or "")
 
 
 async def test_push_reaches_every_device(

@@ -26,6 +26,7 @@ from app.models.enums import Severity
 from app.services.alerts import now
 from app.services.escalation import Target
 from app.services.push import FcmClient, PushNotConfigured, PushResult, ServiceAccount
+from app.services.telegram import TelegramClient
 
 logger = logging.getLogger("admin-alert.dispatch")
 
@@ -61,17 +62,24 @@ SEVERITY_CHANNELS = {
 
 
 class PushDispatcher:
-    """Реальный отправщик push. Каналы telegram/call пока честно помечаются skipped."""
+    """Отправщик по каналам: push в FCM и сообщения в Telegram.
+
+    Название осталось от первой версии, когда был только push. Каналы не
+    выбираются в диспетчере — их выбирает профиль эскалации, а диспетчер
+    разводит их по транспортам.
+    """
 
     def __init__(
         self,
         session_factory: SessionFactory,
         fcm: FcmClient | None,
         *,
+        telegram: TelegramClient | None = None,
         apns_critical: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._fcm = fcm
+        self._telegram = telegram
         self._apns_critical = apns_critical
 
     @property
@@ -82,13 +90,29 @@ class PushDispatcher:
     def session_factory(self) -> SessionFactory:
         return self._session_factory
 
+    @property
+    def telegram_client(self) -> TelegramClient | None:
+        return self._telegram
+
     async def aclose(self) -> None:
-        """Закрыть HTTP-соединение, если отправщик его открыл."""
+        """Закрыть HTTP-соединения, если отправщики их открыли."""
         if self._fcm is not None:
             await self._fcm.aclose()
+        if self._telegram is not None:
+            await self._telegram.aclose()
 
-    async def send(self, channel: str, alert: Alert, target: Target) -> tuple[str, str | None]:
-        """Отправить шаг эскалации. Возвращает (outcome, note) — того вида, что ждёт аудит."""
+    async def send(
+        self, channel: str, alert: Alert, target: Target, *, step: int = 0
+    ) -> tuple[str, str | None]:
+        """Отправить шаг эскалации. Возвращает (outcome, note) — того вида, что ждёт аудит.
+
+        `step` — номер выполняемого шага. В `alert.current_step` в этот момент
+        ещё предыдущий: он обновится после отправки, на случай если отправка
+        сорвётся. Поэтому номер шага передаётся явно — иначе в сообщении
+        дежурный увидел бы «шаг 1» вместо «шаг 2».
+        """
+        if channel == "telegram":
+            return await self._send_telegram(alert, target, step)
         if channel != "push":
             return ("skipped", f"канал {channel}: отправка ещё не подключена")
 
@@ -111,6 +135,47 @@ class PushDispatcher:
         results = await self._fan_out(devices, fresh, data)
 
         return await self._finish(results, target.label)
+
+    async def _send_telegram(
+        self, alert: Alert, target: Target, step: int
+    ) -> tuple[str, str | None]:
+        """Шаг эскалации через Telegram (задача 4.8).
+
+        Канал дублирующий: он ценен там, где push не дошёл. Поэтому его
+        отсутствие — это `skipped`, а не провал шага: если у дежурного не
+        привязан чат, эскалация должна идти дальше по расписанию, а не
+        спотыкаться об отсутствие резервного канала.
+        """
+        if self._telegram is None or not self._telegram.configured:
+            return ("skipped", "Telegram не настроен: нет токена бота")
+
+        if target.admin_id is None:
+            return ("skipped", "адресат не определён: писать некому")
+
+        chat_id = await self._chat_of(target.admin_id)
+        if chat_id is None:
+            return ("skipped", f"{target.label}: Telegram-чат не привязан")
+
+        fresh = await self.load_for_notify(alert.id) or alert
+        result = await self._telegram.send_alert(
+            chat_id,
+            title=fresh.summary,
+            body=_subtitle(fresh),
+            alert_id=fresh.id,
+            step=step or fresh.current_step,
+            occurrences=fresh.occurrences,
+        )
+
+        if result.outcome == "delivered":
+            return ("delivered", f"{target.label}: сообщение в Telegram")
+        return (result.outcome, result.note or f"{target.label}: Telegram не принял сообщение")
+
+    async def _chat_of(self, admin_id: str) -> str | None:
+        """Telegram-чат админа или None, если не привязан."""
+        async with self._session_factory() as session:
+            return (
+                await session.execute(select(Admin.telegram_chat_id).where(Admin.id == admin_id))
+            ).scalar_one_or_none()
 
     async def send_resolved(self, alert: Alert, target: Target) -> tuple[str, str | None]:
         """Отправить «проблема устранена» одному адресату (план, задача 2.6)."""
@@ -352,7 +417,11 @@ def _worse(left: str, right: str) -> str:
 
 
 def make_dispatcher(settings: object) -> PushDispatcher:
-    """Собрать отправщик из настроек. Без ключей Firebase вернёт честный skipped."""
+    """Собрать отправщик из настроек.
+
+    Отсутствие ключей не считается ошибкой: система должна работать и без них,
+    просто соответствующие шаги честно пишут `skipped`.
+    """
     from app.db import SessionLocal
 
     fcm: FcmClient | None = None
@@ -369,5 +438,6 @@ def make_dispatcher(settings: object) -> PushDispatcher:
     return PushDispatcher(
         SessionLocal,
         fcm,
+        telegram=TelegramClient(getattr(settings, "telegram_bot_token", None)),
         apns_critical=bool(getattr(settings, "apns_critical_alerts", False)),
     )

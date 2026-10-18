@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     # BadPriority, и уведомление не дойдёт вовсе — поэтому по умолчанию выключено.
     apns_critical_alerts: bool = False
 
+    # --- Telegram (задача 4.8) ---
+    # Токен бота от @BotFather. Секрет: он даёт право писать от имени бота всем,
+    # кто его знает. Только из окружения, в репозитории быть не должен.
+    telegram_bot_token: str | None = None
+    # Секрет для заголовка X-Telegram-Bot-Api-Secret-Token на webhook. Пусто —
+    # проверка отключена, и webhook открыт всем, кто знает адрес. В проде
+    # обязателен: без него нажатие «Принял» можно подделать.
+    telegram_webhook_secret: str | None = None
+
     @property
     def is_production(self) -> bool:
         return self.environment == "prod"

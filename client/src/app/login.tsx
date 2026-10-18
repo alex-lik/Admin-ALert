@@ -1,18 +1,21 @@
 /**
  * Вход админа (задача 3.2, первый экран по плану).
  *
- * Сессия хранится в защищённом хранилище через react-native-keychain, а не в
- * AsyncStorage: токен доступа из AsyncStorage читается любым приложением с
- * правами на файлы пользователя. Задача 3.3.
+ * Форма проверяет вход и делает настоящий `POST /auth/login`. Токен доступа
+ * кладётся в память модуля API-клиента и уходит в заголовок следующих
+ * запросов.
  *
- * Пока сервера нет — форма проверяет вход локально. Подмена на реальный
- * запрос намеренно оставлена в одном месте, чтобы правка была точечной.
+ * Чего здесь нет: постоянного хранения сессии. Оно требует
+ * react-native-keychain (AsyncStorage читается любым приложением с правами на
+ * файлы пользователя) — это задача 3.3. Пока её нет, после перезапуска
+ * приложения вход приходится повторять.
  */
 
 import { Stack, router } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, TextInput, View } from 'react-native';
 
+import { api } from '../api/client';
 import { AppText, Button, Card, Screen } from '../components/ui';
 import { palette, radius, spacing, typography } from '../theme';
 
@@ -22,7 +25,7 @@ export default function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     setError(null);
 
     if (!email.includes('@')) {
@@ -35,12 +38,16 @@ export default function LoginScreen() {
     }
 
     setBusy(true);
-    // Заглушка реального POST /auth/login. Намеренно показывает состояние
-    // загрузки: в реальности здесь будет задержка сети.
-    setTimeout(() => {
-      setBusy(false);
+    try {
+      await api.login(email.trim(), password);
       router.replace('/');
-    }, 500);
+    } catch (cause) {
+      // Ошибку показываем как есть: сервер уже написал человеческим текстом,
+      // что именно не так («пользователь не найден» и «неверный пароль» — это
+      // разные подсказки, и путать их нельзя).
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setBusy(false);
+    }
   };
 
   return (

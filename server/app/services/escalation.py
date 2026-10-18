@@ -34,6 +34,7 @@ from app.models.entities import (
 )
 from app.models.enums import AlertState
 from app.services.alerts import coerce_aware, new_id, now, transition
+from app.services.quiet import QuietWindow
 
 logger = logging.getLogger("admin-alert.worker")
 
@@ -51,6 +52,10 @@ RETRY_SOON_SECONDS = 30
 class Target:
     admin_id: str | None
     label: str
+    # Часовой пояс адресата: тихие часы считаются по его времени, а не по
+    # серверному. Дежурный в Киеве и администратор во Франкфурте должны иметь
+    # разное «23:00».
+    timezone: str = "UTC"
 
 
 class Dispatcher(Protocol):
@@ -112,7 +117,7 @@ async def resolve_target(session: AsyncSession, target: str, at: datetime) -> Ta
         admins = list(result.scalars())
         if not admins:
             return Target(None, "некому: нет активных админов")
-        return Target(admins[0].id, "всем дежурным")
+        return Target(admins[0].id, "всем дежурным", admins[0].timezone)
 
     role = "primary" if target == "current" else "backup"
     shift = await get_oncall(session, role, at)
@@ -120,12 +125,12 @@ async def resolve_target(session: AsyncSession, target: str, at: datetime) -> Ta
         admin = await session.get(Admin, shift.admin_id)
         if admin is not None and admin.is_active:
             who = "Дежурный" if role == "primary" else "Запасной"
-            return Target(admin.id, f"{who} ({admin.name})")
+            return Target(admin.id, f"{who} ({admin.name})", admin.timezone)
 
     fallback = await first_active_admin(session)
     if fallback is None:
         return Target(None, "дежурный не назначен")
-    return Target(fallback.id, f"{fallback.name} (дежурство не расписано)")
+    return Target(fallback.id, f"{fallback.name} (дежурство не расписано)", fallback.timezone)
 
 
 async def devices_reachable(
@@ -157,6 +162,7 @@ async def poll_once(
     use_lock: bool,
     batch_size: int = 100,
     heartbeat_stale_seconds: int = 900,
+    window: QuietWindow | None = None,
 ) -> int:
     """Один проход воркера. Возвращает число обработанных алертов.
 
@@ -191,8 +197,12 @@ async def poll_once(
                 alert_id,
                 dispatch,
                 heartbeat_stale_seconds=heartbeat_stale_seconds,
+                window=window,
             )
-            if outcome != "skipped":
+            # deferred — это не обработка: алерт честно перенесён на утро.
+            # Считать его обработанным значило бы показывать в мониторинге
+            # работу, которой не было.
+            if outcome not in ("skipped", "deferred"):
                 processed += 1
         except Exception:
             # Один битый алерт не должен останавливать весь проход.
@@ -209,13 +219,15 @@ async def process_due_alert(
     heartbeat_stale_seconds: int = 900,
     final_grace_seconds: int = FINAL_GRACE_SECONDS,
     soon_seconds: int = RETRY_SOON_SECONDS,
+    window: QuietWindow | None = None,
 ) -> str:
     """Обработать один просроченный алерт.
 
-    Возвращает итог: `step:N`, `expired` или `skipped` (алерт уже забрал
-    кто-то другой — нормальная ситуация при двух воркерах).
+    Возвращает итог: `step:N`, `expired`, `deferred` (тихие часы) или `skipped`
+    (алерт уже забрал кто-то другой — нормальная ситуация при двух воркерах).
     """
     moment = now()
+    window = window if window is not None else QuietWindow(start_hour=0, end_hour=0)
 
     # Профиль со шагами нужен движку, project и host — диспетчеру: из них он
     # собирает текст уведомления. Всё грузим явно: ленивая загрузка на
@@ -263,6 +275,26 @@ async def process_due_alert(
 
     target = await resolve_target(session, current.target, moment)
 
+    # Читаем флаг ДО отправки: диспетчер открывает свои сессии и может
+    # инвалидировать связи этого объекта, а ленивая загрузка на AsyncSession
+    # падает с MissingGreenlet. Значение закешировано локально — ниже оно
+    # используется повторно.
+    respects_quiet_hours = alert.profile.respects_quiet_hours
+
+    # Тихие часы (задача 2.13). Проверяем до выполнения шага и только для
+    # профилей, которые их уважают: critical идёт в ночь как обычно.
+    if respects_quiet_hours and window.is_quiet(moment, target.timezone):
+        until = window.ends_at(moment, target.timezone)
+        alert.next_action_at = until
+        await session.commit()
+        logger.info(
+            "тихие часы: алерт %s ждёт до %s (профиль %s)",
+            alert.id,
+            until.isoformat(),
+            alert.profile_id,
+        )
+        return "deferred"
+
     outcome: str
     note: str | None
     if current.channel == "push" and not await devices_reachable(
@@ -294,16 +326,28 @@ async def process_due_alert(
     await transition(session, alert, AlertState.NOTIFYING)
 
     if outcome == "failed":
-        alert.next_action_at = moment + timedelta(seconds=soon_seconds)
+        next_at = moment + timedelta(seconds=soon_seconds)
     else:
         following = next((d for d in definitions if d.step > current.step), None)
         if following is not None and alert.current_step < alert.profile.max_steps:
             planned = coerce_aware(alert.first_seen_at) + timedelta(seconds=following.delay_seconds)
             # Догоняем без ожидания: после рестарта воркера просроченные
             # шаги не должны ждать полного расписания заново.
-            alert.next_action_at = max(planned, moment)
+            next_at = max(planned, moment)
         else:
-            alert.next_action_at = moment + timedelta(seconds=final_grace_seconds)
+            next_at = moment + timedelta(seconds=final_grace_seconds)
+
+    # Тихие часы проверяются на каждом шаге, а не только на первом. Иначе
+    # цепочка `push → telegram → call` ночью разбудила бы на push, а к утру
+    # добралась до звонка: тихие часы получились бы только для первого шага.
+    if respects_quiet_hours and window.is_quiet(next_at, target.timezone):
+        until = window.ends_at(next_at, target.timezone)
+        logger.info(
+            "тихие часы: следующий шаг алерта %s перенесён на %s", alert.id, until.isoformat()
+        )
+        next_at = until
+
+    alert.next_action_at = next_at
 
     await session.commit()
     return f"step:{current.step}"

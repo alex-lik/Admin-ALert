@@ -16,6 +16,9 @@ dependencies = [
     # Единственная причина — подпись JWT для FCM (RS256). Стандартной
     # библиотеке это неподвластно, а Google требует именно подпись.
     "cryptography>=44",
+    # База IANA-зон в виде пакета: на Windows её нет в системе, и zoneinfo
+    # падает с ZoneInfoNotFoundError. Нужна для тихих часов и смен дежурства.
+    "tzdata>=2024.1",
 ]
 
 [build-system]

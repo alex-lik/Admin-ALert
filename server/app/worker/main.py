@@ -19,7 +19,7 @@ logger = logging.getLogger("admin-alert.worker")
 async def poll_once() -> int:
     """Один проход: вернуть количество обработанных алертов."""
     from app.db import SessionLocal
-    from app.services import escalation
+    from app.services import escalation, quiet
     from app.services.dispatch import make_dispatcher
 
     settings = get_settings()
@@ -32,6 +32,7 @@ async def poll_once() -> int:
                 use_lock=settings.database_url.startswith("postgresql"),
                 batch_size=settings.worker_batch_size,
                 heartbeat_stale_seconds=settings.heartbeat_stale_seconds,
+                window=quiet.window_from_settings(settings),
             )
     finally:
         await dispatcher.aclose()

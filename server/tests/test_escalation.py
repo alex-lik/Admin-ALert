@@ -25,6 +25,7 @@ from app.schemas.events import EventStatus, IncomingEvent, Severity
 from app.services import escalation
 from app.services.alerts import AlertError, ingest_event, now, reassign_alert, snooze_alert
 from app.services.auth import register_admin
+from app.services.quiet import QuietWindow, zone_of
 
 
 @pytest_asyncio.fixture
@@ -271,6 +272,251 @@ async def test_target_all_without_admins(session: AsyncSession, project: Project
     """Некому пейджить: метка говорит об этом прямо, а не молчит."""
     target = await escalation.resolve_target(session, "all", now())
     assert target.admin_id is None
+
+
+# ───────────────────────────── Тихие часы (2.13) ─────────────────────────────
+
+# Окно, в которое попадает «сейчас»: 00:00–23:59 по часовому поясу админа.
+ALWAYS_QUIET = QuietWindow(start_hour=0, end_hour=23)
+NEVER_QUIET = QuietWindow(start_hour=5, end_hour=5)
+
+
+def _make_due(alert: Alert) -> None:
+    """Сделать таймер просроченным: иначе процесс вернёт skipped, а не проверит шаг."""
+    alert.next_action_at = now() - timedelta(seconds=1)
+
+
+async def _profile(session: AsyncSession, profile_id: str, *, respects: bool) -> None:
+    """Профиль с одним шагом и заданным отношением к тихим часам."""
+    session.add(
+        EscalationProfile(
+            id=profile_id,
+            description=profile_id,
+            respects_quiet_hours=respects,
+            max_steps=3,
+        )
+    )
+    session.add(
+        EscalationStepDefinition(
+            id=f"esd_{profile_id}",
+            profile_id=profile_id,
+            step=1,
+            channel="push",
+            delay_seconds=60,
+            target="current",
+        )
+    )
+    await session.flush()
+
+
+async def test_warning_waits_until_morning(session: AsyncSession, admin) -> None:
+    """Warning ночью не будит: шаг переносится на конец тихих часов."""
+    await _profile(session, "warning", respects=True)
+    session.add(Project(id="prj_w", name="w", is_vip=False, api_key="k", default_profile="warning"))
+    await session.flush()
+
+    project = await session.get(Project, "prj_w")
+    event = IncomingEvent(
+        project="w",
+        host="h1",
+        check="disk",
+        severity=Severity.WARNING,
+        summary="Место заканчивается",
+        status=EventStatus.FIRING,
+    )
+    alert, _ = await ingest_event(session, project, event)
+    await session.flush()
+    _make_due(alert)
+
+    result = await escalation.process_due_alert(
+        session, alert.id, escalation.NullDispatcher(), window=ALWAYS_QUIET
+    )
+
+    assert result == "deferred"
+    assert alert.state == AlertState.TRIGGERED, "алерт ждёт, а не эскалирует"
+    assert alert.current_step == 0, "шаг не выполнен"
+    assert alert.next_action_at is not None
+    # Таймер уехал в будущее — до утра.
+    assert alert.next_action_at > now()
+
+
+async def test_critical_ignores_quiet_hours(session: AsyncSession, admin) -> None:
+    """Critical ночью эскалирует как обычно: сертификат не подождёт до утра."""
+    await _profile(session, "critical", respects=False)
+    session.add(
+        Project(id="prj_c", name="c", is_vip=False, api_key="kc", default_profile="critical")
+    )
+    await session.flush()
+
+    project = await session.get(Project, "prj_c")
+    event = IncomingEvent(
+        project="c",
+        host="h1",
+        check="ssl",
+        severity=Severity.CRITICAL,
+        summary="Сертификат истёк",
+        status=EventStatus.FIRING,
+    )
+    alert, _ = await ingest_event(session, project, event)
+    await session.flush()
+    _make_due(alert)
+
+    result = await escalation.process_due_alert(
+        session, alert.id, escalation.NullDispatcher(), window=ALWAYS_QUIET
+    )
+
+    assert result == "step:1"
+    assert alert.current_step == 1
+    assert alert.state == AlertState.NOTIFYING
+
+
+async def test_second_step_also_deferred(session: AsyncSession, admin) -> None:
+    """Тихие часы действуют на каждый шаг, а не только на первый.
+
+    Иначе цепочка push → telegram → call ночью разбудила бы на push, а к утру
+    добралась бы до звонка: тихие часы получились бы только для первого шага.
+    """
+    await _profile(session, "warning", respects=True)
+    session.add(Project(id="prj_w", name="w", is_vip=False, api_key="k", default_profile="warning"))
+    session.add(
+        Device(
+            id="dev_ok",
+            admin_id=admin.id,
+            token="tok",
+            platform="android",
+            last_seen_at=now(),
+            is_active=True,
+        )
+    )
+    await session.flush()
+
+    project = await session.get(Project, "prj_w")
+    alert, _ = await ingest_event(
+        session,
+        project,
+        IncomingEvent(
+            project="w",
+            host="h1",
+            check="disk",
+            severity=Severity.WARNING,
+            summary="Место заканчивается",
+            status=EventStatus.FIRING,
+        ),
+    )
+    await session.flush()
+    _make_due(alert)
+
+    dispatcher = escalation.NullDispatcher()
+    first = await escalation.process_due_alert(session, alert.id, dispatcher, window=ALWAYS_QUIET)
+    assert first == "deferred"
+
+    # Отодвигаем таймер в прошлое, чтобы проверить второй шаг того же профиля.
+    alert.next_action_at = now() - timedelta(seconds=1)
+    await session.flush()
+
+    second = await escalation.process_due_alert(session, alert.id, dispatcher, window=ALWAYS_QUIET)
+    assert second == "deferred"
+    assert alert.next_action_at > now(), "второй шаг тоже ждёт утра"
+
+
+async def test_outside_quiet_hours_alert_escalates(session: AsyncSession, admin) -> None:
+    """Днём тихие часы не действуют — alert идёт по расписанию."""
+    await _profile(session, "warning", respects=True)
+    session.add(Project(id="prj_w", name="w", is_vip=False, api_key="k", default_profile="warning"))
+    await session.flush()
+
+    project = await session.get(Project, "prj_w")
+    alert, _ = await ingest_event(
+        session,
+        project,
+        IncomingEvent(
+            project="w",
+            host="h1",
+            check="disk",
+            severity=Severity.WARNING,
+            summary="Место заканчивается",
+            status=EventStatus.FIRING,
+        ),
+    )
+    await session.flush()
+    _make_due(alert)
+
+    result = await escalation.process_due_alert(
+        session, alert.id, escalation.NullDispatcher(), window=NEVER_QUIET
+    )
+
+    assert result == "step:1"
+
+
+async def test_poll_counts_deferred_as_not_processed(session: AsyncSession, admin) -> None:
+    """Отложенный алерт — это не работа: показывать его обработанным врёт."""
+    await _profile(session, "warning", respects=True)
+    session.add(Project(id="prj_w", name="w", is_vip=False, api_key="k", default_profile="warning"))
+    await session.flush()
+
+    project = await session.get(Project, "prj_w")
+    await ingest_event(
+        session,
+        project,
+        IncomingEvent(
+            project="w",
+            host="h1",
+            check="disk",
+            severity=Severity.WARNING,
+            summary="Место заканчивается",
+            status=EventStatus.FIRING,
+        ),
+    )
+    await session.commit()
+
+    processed = await escalation.poll_once(session, use_lock=False, window=ALWAYS_QUIET)
+
+    assert processed == 0
+    assert await escalation.count_due(session) == 0, "алерт перенесён, а не забыт"
+
+
+async def test_respects_quiet_hours_uses_recipient_timezone(session: AsyncSession, admin) -> None:
+    """Тихие часы считаются по времени адресата, а не сервера.
+
+    Трюк: выбираем окно, которое тихо по UTC в момент, когда по Киеву уже
+    утро. Если бы считалось по серверному времени, тест прошёл бы наоборот.
+    """
+    admin.timezone = "Europe/Kyiv"
+    await session.flush()
+
+    await _profile(session, "warning", respects=True)
+    session.add(Project(id="prj_w", name="w", is_vip=False, api_key="k", default_profile="warning"))
+    await session.flush()
+
+    project = await session.get(Project, "prj_w")
+    alert, _ = await ingest_event(
+        session,
+        project,
+        IncomingEvent(
+            project="w",
+            host="h1",
+            check="disk",
+            severity=Severity.WARNING,
+            summary="Место заканчивается",
+            status=EventStatus.FIRING,
+        ),
+    )
+    await session.flush()
+    _make_due(alert)
+
+    # Окно 00:00–23:59 по UTC: сейчас тихо по серверу. По Киеву сейчас UTC+3,
+    # значит локальный час >= 23 тихо, а если локально утро (час < 23) — нет.
+    window = QuietWindow(start_hour=23, end_hour=22)  # тихо только 23:00–21:59 UTC
+    local_hour = now().astimezone(zone_of("Europe/Kyiv")).hour
+
+    result = await escalation.process_due_alert(
+        session, alert.id, escalation.NullDispatcher(), window=window
+    )
+
+    if local_hour >= 23 or local_hour < 22:
+        assert result == "deferred", f"локально {local_hour:02d}: тихо по киевскому времени"
+    else:
+        assert result == "step:1", f"локально {local_hour:02d}: утро, тихие часы кончились"
 
 
 # ───────────────────────────── Resolved ─────────────────────────────

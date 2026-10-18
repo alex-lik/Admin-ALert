@@ -108,9 +108,13 @@ async def resolve_target(session: AsyncSession, target: str, at: datetime) -> Ta
     """Кому адресован шаг (задача 2.11): текущий, следующий или всем.
 
     Адресат вычисляется в момент выполнения шага, а не при создании алерта:
-    дежурство могло смениться. Если расписание не заполнено, падаем на
-    первого активного админа и честно пишем это в метку — лучше пейджить
-    хоть кого-то, чем молча никого.
+    дежурство могло смениться.
+
+    Если в расписании дыра, падаем на первого активного админа — но метку
+    делаем разной для двух разных поломок: «расписание не заведено» (его
+    никто не настроил) и «в расписании дыра» (настроили, но оставили дыру).
+    Во втором случае дежурный, увидевший метку в аудите, поймёт, что чинить
+    надо расписание, а не себя.
     """
     if target == "all":
         result = await session.execute(select(Admin).where(Admin.is_active.is_(True)))
@@ -130,7 +134,25 @@ async def resolve_target(session: AsyncSession, target: str, at: datetime) -> Ta
     fallback = await first_active_admin(session)
     if fallback is None:
         return Target(None, "дежурный не назначен")
-    return Target(fallback.id, f"{fallback.name} (дежурство не расписано)", fallback.timezone)
+    reason = await why_fallback(session, role)
+    return Target(fallback.id, f"{fallback.name} ({reason})", fallback.timezone)
+
+
+async def why_fallback(session: AsyncSession, role: str) -> str:
+    """Почему шаг ушёл во фолбэк: расписания нет или в нём дыра."""
+    in_role = (
+        await session.execute(
+            select(func.count()).select_from(OnCallShift).where(OnCallShift.role == role)
+        )
+    ).scalar_one()
+
+    if in_role:
+        return f"в расписании дыра ({role})"
+
+    anywhere = (await session.execute(select(func.count()).select_from(OnCallShift))).scalar_one()
+    if anywhere:
+        return f"роль {role} не заведена"
+    return "расписание не заведено"
 
 
 async def devices_reachable(

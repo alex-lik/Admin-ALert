@@ -19,13 +19,18 @@ logger = logging.getLogger("admin-alert.worker")
 async def poll_once() -> int:
     """Один проход: вернуть количество обработанных алертов."""
     from app.db import SessionLocal
-    from app.services import escalation, quiet
+    from app.services import escalation, oncall, quiet
     from app.services.dispatch import make_dispatcher
 
     settings = get_settings()
     dispatcher = make_dispatcher(settings)
     try:
         async with SessionLocal() as session:
+            # Расписание поддерживается наперёд: ротация материализуется на
+            # месяц, и кто-то должен её продолжать. При нормальном расписании
+            # здесь не создаётся ничего — только когда горизонт подходит к
+            # концу.
+            await oncall.ensure_horizon(session)
             return await escalation.poll_once(
                 session,
                 dispatcher,

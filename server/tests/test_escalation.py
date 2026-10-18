@@ -262,10 +262,14 @@ async def test_fresh_device_step_is_recorded(
 async def test_target_falls_back_without_schedule(
     session: AsyncSession, project: Project, admin
 ) -> None:
-    """Без расписания дежурств шаг адресуется первому активному админу."""
+    """Без расписания шаг адресуется первому активному админу.
+
+    Метка говорит, что расписание не заведено (задача 2.10), а не просто
+    «не расписано»: дежурный должен понимать, что чинить.
+    """
     target = await escalation.resolve_target(session, "current", now())
     assert target.admin_id == admin.id
-    assert "не расписано" in target.label
+    assert "расписание не заведено" in target.label
 
 
 async def test_target_all_without_admins(session: AsyncSession, project: Project) -> None:
